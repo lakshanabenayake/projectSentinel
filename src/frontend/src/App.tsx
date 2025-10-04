@@ -7,12 +7,12 @@ import {
   Box,
   Chip
 } from '@mui/material'
-import { useSocket } from '../hooks/useSocket'
-import Dashboard from '../components/Dashboard'
-import AlertsPanel from '../components/AlertsPanel'
-import EventsPanel from '../components/EventsPanel'
-import StationOverview from '../components/StationOverview'
-import RealTimeCharts from '../components/RealTimeCharts'
+import { useSocket } from './hooks/useSocket'
+import Dashboard from './components/Dashboard'
+import AlertsPanel from './components/AlertsPanel'
+import EventsPanel from './components/EventsPanel'
+import StationOverview from './components/StationOverview'
+import RealTimeCharts from './components/RealTimeCharts'
 
 const App: React.FC = () => {
   const { isConnected, metrics, events, connectionError, reconnect } = useSocket()

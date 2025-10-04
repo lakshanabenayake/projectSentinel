@@ -60,12 +60,18 @@ def test_node_setup():
         node_available = False
     
     try:
-        result = subprocess.run(["npm", "--version"], capture_output=True, text=True)
+        result = subprocess.run(["npm", "--version"], capture_output=True, text=True, shell=True)
         print(f"✓ npm {result.stdout.strip()} available")
         npm_available = True
-    except FileNotFoundError:
-        print("✗ npm not available")
-        npm_available = False
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        try:
+            # Try with .cmd extension on Windows
+            result = subprocess.run(["npm.cmd", "--version"], capture_output=True, text=True)
+            print(f"✓ npm {result.stdout.strip()} available")
+            npm_available = True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            print("✗ npm not available")
+            npm_available = False
     
     return node_available and npm_available
 
@@ -73,7 +79,8 @@ def test_project_structure():
     """Test project structure"""
     print("\nTesting project structure...")
     
-    base_path = Path(__file__).parent.parent
+    # Go up two levels from evidence/executables/ to project root
+    base_path = Path(__file__).parent.parent.parent
     
     required_paths = [
         "src/backend/app.py",

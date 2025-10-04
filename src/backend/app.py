@@ -26,8 +26,13 @@ except ImportError as e:
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'project-sentinel-secret-key'
 CORS(app, origins=["http://localhost:3000"])
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000"], 
-                   logger=True, engineio_logger=True)
+
+# Use threading async_mode to avoid eventlet issues on Python 3.12
+socketio = SocketIO(app, 
+                   cors_allowed_origins=["http://localhost:3000"], 
+                   async_mode='threading',
+                   logger=False, 
+                   engineio_logger=False)
 
 # Global state for event detection (from serve1.py)
 EVENT_COUNTER = 0

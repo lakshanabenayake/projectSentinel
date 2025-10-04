@@ -18,10 +18,13 @@ class SentinelDemo:
     """Main demo automation class"""
     
     def __init__(self):
-        self.base_path = Path(__file__).parent.parent
+        # Go up from evidence/executables/ to project root
+        self.base_path = Path(__file__).parent.parent.parent
         self.src_path = self.base_path / "src"
         self.backend_path = self.src_path / "backend"
         self.frontend_path = self.src_path / "frontend"
+        self.zebra_path = self.base_path / "zebra"
+        self.stream_server_path = self.zebra_path / "data" / "streaming-server"
         self.output_path = Path("./results")
         
         self.backend_process = None
@@ -40,14 +43,61 @@ class SentinelDemo:
         """Run shell command with error handling"""
         self.log(f"Running: {command}")
         try:
-            result = subprocess.run(
-                command, 
-                shell=True, 
-                cwd=cwd, 
-                check=check,
-                capture_output=True,
-                text=True
-            )
+            # Handle paths with spaces properly
+            if isinstance(command, str):
+                import shlex
+                # On Windows, don't use shlex.split as it doesn't handle Windows paths well
+                if os.name == 'nt':
+                    # Use list format for subprocess to handle spaces properly
+                    if command.startswith('"') or ' ' in command:
+                        # Convert to list format for subprocess
+                        parts = command.split()
+                        if len(parts) > 0 and parts[0].endswith('python.exe'):
+                            # Reconstruct with proper path handling
+                            python_exe = sys.executable
+                            new_command = [python_exe] + parts[1:]
+                            result = subprocess.run(
+                                new_command,
+                                cwd=cwd,
+                                check=check,
+                                capture_output=True,
+                                text=True
+                            )
+                        else:
+                            result = subprocess.run(
+                                command,
+                                shell=True,
+                                cwd=cwd,
+                                check=check,
+                                capture_output=True,
+                                text=True
+                            )
+                    else:
+                        result = subprocess.run(
+                            command,
+                            shell=True,
+                            cwd=cwd,
+                            check=check,
+                            capture_output=True,
+                            text=True
+                        )
+                else:
+                    result = subprocess.run(
+                        shlex.split(command),
+                        cwd=cwd,
+                        check=check,
+                        capture_output=True,
+                        text=True
+                    )
+            else:
+                result = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    check=check,
+                    capture_output=True,
+                    text=True
+                )
+            
             if result.stdout:
                 print(result.stdout)
             return result
@@ -63,26 +113,42 @@ class SentinelDemo:
         """Install Python backend dependencies"""
         self.log("Installing Python dependencies...")
         
-        # Use python -m pip for better compatibility
-        pip_cmd = f"{sys.executable} -m pip"
+        # Use list format to avoid path space issues
+        pip_base_cmd = [sys.executable, "-m", "pip"]
         
         try:
             # Update pip first to avoid issues
             self.log("Updating pip...")
-            self.run_command(f"{pip_cmd} install --upgrade pip", check=False)
+            pip_update_cmd = pip_base_cmd + ["install", "--upgrade", "pip"]
+            self.run_command(pip_update_cmd, check=False)
             
             # Install setuptools explicitly first
             self.log("Installing setuptools...")
-            self.run_command(f"{pip_cmd} install --upgrade setuptools", check=False)
+            setuptools_cmd = pip_base_cmd + ["install", "--upgrade", "setuptools"]
+            self.run_command(setuptools_cmd, check=False)
             
         except Exception as e:
             self.log(f"Warning: Could not update pip/setuptools: {e}")
         
-        # Install backend requirements
+        # Install backend requirements - try Python 3.12 compatible version first
+        py312_requirements = self.backend_path / "requirements-py312.txt"
         requirements_file = self.backend_path / "requirements.txt"
+        
+        # Try Python 3.12 compatible requirements first
+        if py312_requirements.exists():
+            try:
+                self.log("Using Python 3.12 compatible requirements...")
+                requirements_cmd = pip_base_cmd + ["install", "-r", str(py312_requirements)]
+                self.run_command(requirements_cmd, cwd=self.backend_path)
+                return
+            except subprocess.CalledProcessError:
+                self.log("Python 3.12 requirements failed, trying standard requirements...")
+        
+        # Fall back to standard requirements
         if requirements_file.exists():
             try:
-                self.run_command(f"{pip_cmd} install -r {requirements_file}", cwd=self.backend_path)
+                requirements_cmd = pip_base_cmd + ["install", "-r", str(requirements_file)]
+                self.run_command(requirements_cmd, cwd=self.backend_path)
             except subprocess.CalledProcessError:
                 self.log("Requirements file installation failed, trying individual packages...")
                 self.install_individual_packages()
@@ -91,15 +157,16 @@ class SentinelDemo:
     
     def install_individual_packages(self):
         """Install essential packages individually with error handling"""
-        pip_cmd = f"{sys.executable} -m pip"
+        # Use list format to avoid path space issues
+        pip_base_cmd = [sys.executable, "-m", "pip"]
         
-        # Essential packages with more flexible versions
+        # Essential packages with more flexible versions (Python 3.12 compatible)
         packages = [
             "flask>=2.0.0",
             "flask-socketio>=5.0.0", 
             "flask-cors>=4.0.0",
-            "requests>=2.25.0",
-            "eventlet>=0.33.0"
+            "requests>=2.25.0"
+            # eventlet removed due to Python 3.12 compatibility issues
         ]
         
         # Optional packages (nice to have but not critical)
@@ -113,16 +180,25 @@ class SentinelDemo:
         for package in packages:
             try:
                 self.log(f"Installing {package}...")
-                self.run_command(f"{pip_cmd} install {package}", check=True)
+                install_cmd = pip_base_cmd + ["install", package]
+                self.run_command(install_cmd, check=True)
             except subprocess.CalledProcessError as e:
                 self.log(f"CRITICAL: Failed to install {package}: {e}")
-                raise
+                # Try with --user flag as fallback
+                try:
+                    self.log(f"Retrying {package} with --user flag...")
+                    user_cmd = pip_base_cmd + ["install", "--user", package]
+                    self.run_command(user_cmd, check=True)
+                except Exception as e2:
+                    self.log(f"CRITICAL: Failed to install {package} with --user: {e2}")
+                    raise
         
         # Install optional packages (don't fail if these don't work)
         for package in optional_packages:
             try:
                 self.log(f"Installing optional package {package}...")
-                self.run_command(f"{pip_cmd} install {package}", check=False)
+                install_cmd = pip_base_cmd + ["install", package]
+                self.run_command(install_cmd, check=False)
             except Exception as e:
                 self.log(f"Warning: Could not install optional package {package}: {e}")
     
@@ -132,19 +208,34 @@ class SentinelDemo:
         
         # Check if npm is available
         try:
-            result = subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True)
+            result = subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True, shell=True)
             self.log(f"npm version: {result.stdout.strip()}")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self.log("WARNING: npm not found. Frontend will not be available.")
-            self.log("The backend API will still work on port 5000")
-            return False
+            try:
+                # Try with .cmd extension on Windows
+                result = subprocess.run(["npm.cmd", "--version"], check=True, capture_output=True, text=True)
+                self.log(f"npm version: {result.stdout.strip()}")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                self.log("WARNING: npm not found. Frontend will not be available.")
+                self.log("The backend API will still work on port 5000")
+                return False
         
         # Install frontend dependencies
         if (self.frontend_path / "package.json").exists():
             try:
                 self.log("Installing frontend packages... (this may take a few minutes)")
                 # Use --no-audit --no-fund for faster installation
-                self.run_command("npm install --no-audit --no-fund", cwd=self.frontend_path)
+                # Use string command with shell=True for npm on Windows
+                npm_install_cmd = "npm install --no-audit --no-fund"
+                result = subprocess.run(
+                    npm_install_cmd,
+                    shell=True,
+                    cwd=self.frontend_path,
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    raise subprocess.CalledProcessError(result.returncode, npm_install_cmd, result.stderr)
                 self.log("Frontend dependencies installed successfully")
                 return True
             except subprocess.CalledProcessError as e:
@@ -240,15 +331,20 @@ class SentinelDemo:
             # First try to build the frontend
             self.log("Building frontend...")
             try:
-                self.run_command("npm run build", cwd=self.frontend_path, check=False)
+                npm_build_cmd = "npm run build"
+                subprocess.run(npm_build_cmd, shell=True, cwd=self.frontend_path, check=False)
             except:
                 self.log("Build failed, trying dev server anyway...")
             
             # Start development server
             self.log("Starting development server...")
-            self.frontend_process = subprocess.Popen([
-                "npm", "run", "dev"
-            ], cwd=self.frontend_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.frontend_process = subprocess.Popen(
+                "npm run dev",
+                shell=True,
+                cwd=self.frontend_path, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE
+            )
             
             # Wait for frontend to start
             self.log("Waiting for frontend to start... (10 seconds)")
