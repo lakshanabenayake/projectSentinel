@@ -6,6 +6,7 @@ Handles real-time data ingestion and preprocessing
 import pandas as pd
 import numpy as np
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import sqlite3
@@ -22,13 +23,21 @@ class DataProcessor:
     def load_reference_data(self):
         """Load products and customer reference data"""
         try:
+            # Get the base directory (go up to zebra folder)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            base_dir = os.path.join(current_dir, '..', '..', '..', '..')
+            
             # Load products catalog
-            products_df = pd.read_csv('../../../data/input/products_list.csv')
+            products_path = os.path.join(base_dir, 'data', 'input', 'products_list.csv')
+            products_df = pd.read_csv(products_path)
             self.products_catalog = products_df.set_index('SKU').to_dict('index')
             
-            # Load customer data  
-            customers_df = pd.read_csv('../../../data/input/customer_data.csv')
+            # Load customer data
+            customers_path = os.path.join(base_dir, 'data', 'input', 'customer_data.csv')
+            customers_df = pd.read_csv(customers_path)
             self.customers_data = customers_df.set_index('Customer_ID').to_dict('index')
+            
+            print(f"✅ Loaded {len(self.products_catalog)} products and {len(self.customers_data)} customers")
             
         except Exception as e:
             print(f"Warning: Could not load reference data: {e}")
