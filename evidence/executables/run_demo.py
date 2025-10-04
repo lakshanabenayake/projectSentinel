@@ -11,6 +11,7 @@ import time
 import threading
 import signal
 import json
+import requests
 from pathlib import Path
 
 class SentinelDemo:
@@ -62,29 +63,68 @@ class SentinelDemo:
         """Install Python backend dependencies"""
         self.log("Installing Python dependencies...")
         
-        # Check if pip is available
+        # Use python -m pip for better compatibility
+        pip_cmd = f"{sys.executable} -m pip"
+        
         try:
-            subprocess.run(["pip3", "--version"], check=True, capture_output=True)
-            pip_cmd = "pip3"
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pip_cmd = "pip"
+            # Update pip first to avoid issues
+            self.log("Updating pip...")
+            self.run_command(f"{pip_cmd} install --upgrade pip", check=False)
+            
+            # Install setuptools explicitly first
+            self.log("Installing setuptools...")
+            self.run_command(f"{pip_cmd} install --upgrade setuptools", check=False)
+            
+        except Exception as e:
+            self.log(f"Warning: Could not update pip/setuptools: {e}")
         
         # Install backend requirements
         requirements_file = self.backend_path / "requirements.txt"
         if requirements_file.exists():
-            self.run_command(f"{pip_cmd} install -r {requirements_file}", cwd=self.backend_path)
+            try:
+                self.run_command(f"{pip_cmd} install -r {requirements_file}", cwd=self.backend_path)
+            except subprocess.CalledProcessError:
+                self.log("Requirements file installation failed, trying individual packages...")
+                self.install_individual_packages()
         else:
-            # Install essential packages if requirements.txt is missing
-            packages = [
-                "flask==2.3.3",
-                "flask-socketio==5.3.6", 
-                "flask-cors==4.0.0",
-                "pandas==2.1.1",
-                "numpy==1.24.3",
-                "scikit-learn==1.3.0"
-            ]
-            for package in packages:
-                self.run_command(f"{pip_cmd} install {package}")
+            self.install_individual_packages()
+    
+    def install_individual_packages(self):
+        """Install essential packages individually with error handling"""
+        pip_cmd = f"{sys.executable} -m pip"
+        
+        # Essential packages with more flexible versions
+        packages = [
+            "flask>=2.0.0",
+            "flask-socketio>=5.0.0", 
+            "flask-cors>=4.0.0",
+            "requests>=2.25.0",
+            "eventlet>=0.33.0"
+        ]
+        
+        # Optional packages (nice to have but not critical)
+        optional_packages = [
+            "pandas",
+            "numpy", 
+            "scikit-learn"
+        ]
+        
+        # Install essential packages
+        for package in packages:
+            try:
+                self.log(f"Installing {package}...")
+                self.run_command(f"{pip_cmd} install {package}", check=True)
+            except subprocess.CalledProcessError as e:
+                self.log(f"CRITICAL: Failed to install {package}: {e}")
+                raise
+        
+        # Install optional packages (don't fail if these don't work)
+        for package in optional_packages:
+            try:
+                self.log(f"Installing optional package {package}...")
+                self.run_command(f"{pip_cmd} install {package}", check=False)
+            except Exception as e:
+                self.log(f"Warning: Could not install optional package {package}: {e}")
     
     def install_node_dependencies(self):
         """Install Node.js frontend dependencies"""
@@ -92,28 +132,38 @@ class SentinelDemo:
         
         # Check if npm is available
         try:
-            subprocess.run(["npm", "--version"], check=True, capture_output=True)
+            result = subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True)
+            self.log(f"npm version: {result.stdout.strip()}")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self.log("WARNING: npm not found. Skipping frontend installation.")
+            self.log("WARNING: npm not found. Frontend will not be available.")
+            self.log("The backend API will still work on port 5000")
             return False
         
         # Install frontend dependencies
         if (self.frontend_path / "package.json").exists():
-            self.run_command("npm install", cwd=self.frontend_path)
-            return True
+            try:
+                self.log("Installing frontend packages... (this may take a few minutes)")
+                # Use --no-audit --no-fund for faster installation
+                self.run_command("npm install --no-audit --no-fund", cwd=self.frontend_path)
+                self.log("Frontend dependencies installed successfully")
+                return True
+            except subprocess.CalledProcessError as e:
+                self.log(f"WARNING: Frontend installation failed: {e}")
+                self.log("Continuing without frontend...")
+                return False
         else:
-            self.log("WARNING: package.json not found. Skipping frontend installation.")
+            self.log("WARNING: package.json not found. Frontend will not be available.")
             return False
     
     def start_streaming_server(self):
         """Start the data streaming server"""
         self.log("Starting streaming server...")
         
-        # Look for streaming server in data directory
+        # Look for streaming server in zebra directory
         streaming_server_path = None
         possible_paths = [
-            self.base_path.parent.parent.parent / "data" / "streaming-server" / "stream_server.py",
-            Path("../../../data/streaming-server/stream_server.py"),
+            self.base_path / "zebra" / "data" / "streaming-server" / "stream_server.py",
+            Path("../../zebra/data/streaming-server/stream_server.py"),
             Path("./stream_server.py")
         ]
         
@@ -130,12 +180,13 @@ class SentinelDemo:
             self.streaming_process = subprocess.Popen([
                 sys.executable, str(streaming_server_path),
                 "--port", "8765",
-                "--speed", "10", 
+                "--speed", "2.0", 
                 "--loop"
             ], cwd=streaming_server_path.parent)
             
             # Wait a moment for server to start
             time.sleep(3)
+            self.log("Streaming server started on port 8765")
             return self.streaming_process
         except Exception as e:
             self.log(f"Failed to start streaming server: {e}")
@@ -161,6 +212,17 @@ class SentinelDemo:
             
             # Wait for backend to start
             time.sleep(5)
+            
+            # Test backend health
+            try:
+                response = requests.get("http://localhost:5000/api/health", timeout=10)
+                if response.status_code == 200:
+                    self.log("Backend health check passed")
+                else:
+                    self.log(f"Backend health check failed: {response.status_code}")
+            except requests.RequestException as e:
+                self.log(f"Backend health check failed: {e}")
+            
             return self.backend_process
         except Exception as e:
             self.log(f"Failed to start backend: {e}")
@@ -175,48 +237,121 @@ class SentinelDemo:
             return None
         
         try:
+            # First try to build the frontend
+            self.log("Building frontend...")
+            try:
+                self.run_command("npm run build", cwd=self.frontend_path, check=False)
+            except:
+                self.log("Build failed, trying dev server anyway...")
+            
+            # Start development server
+            self.log("Starting development server...")
             self.frontend_process = subprocess.Popen([
                 "npm", "run", "dev"
-            ], cwd=self.frontend_path)
+            ], cwd=self.frontend_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             # Wait for frontend to start
+            self.log("Waiting for frontend to start... (10 seconds)")
             time.sleep(10)
-            return self.frontend_process
+            
+            # Check if process is still running
+            if self.frontend_process.poll() is None:
+                self.log("Frontend server started successfully")
+                return self.frontend_process
+            else:
+                self.log("Frontend process terminated unexpectedly")
+                return None
+                
         except Exception as e:
             self.log(f"Failed to start frontend: {e}")
             return None
     
-    def generate_sample_events(self):
-        """Generate sample events for testing"""
-        self.log("Generating sample events...")
+    def wait_for_events_generation(self):
+        """Wait for backend to generate events from stream"""
+        self.log("Waiting for event detection system to generate events...")
         
-        try:
-            # Import and use event generator
-            sys.path.append(str(self.backend_path))
-            from event_generator import EventGenerator
+        # Create output directories
+        evidence_output = self.base_path / "evidence" / "output"
+        test_output = evidence_output / "test"
+        final_output = evidence_output / "final"
+        test_output.mkdir(parents=True, exist_ok=True)
+        final_output.mkdir(parents=True, exist_ok=True)
+        
+        # Wait for events to be generated by the backend
+        wait_time = 60  # Wait 60 seconds for events
+        self.log(f"Collecting events for {wait_time} seconds...")
+        
+        start_time = time.time()
+        event_count = 0
+        
+        while time.time() - start_time < wait_time:
+            try:
+                # Check if backend has generated events
+                response = requests.get("http://localhost:5000/api/metrics", timeout=5)
+                if response.status_code == 200:
+                    metrics = response.json()
+                    current_events = metrics.get('total_events', 0)
+                    if current_events > event_count:
+                        self.log(f"Events detected: {current_events}")
+                        event_count = current_events
+            except requests.RequestException:
+                pass
             
-            generator = EventGenerator()
-            
-            # Generate sample events
-            sample_events = generator.generate_sample_events()
-            
-            # Create output directories
-            self.output_path.mkdir(exist_ok=True)
-            test_output = self.output_path / "test"
-            final_output = self.output_path / "final"
-            test_output.mkdir(exist_ok=True)
-            final_output.mkdir(exist_ok=True)
-            
-            # Export to both test and final directories
-            generator.export_to_file(test_output / "events.jsonl")
-            generator.export_to_file(final_output / "events.jsonl")
-            
-            self.log(f"Generated {len(sample_events)} sample events")
-            return True
-            
-        except Exception as e:
-            self.log(f"Failed to generate events: {e}")
-            return False
+            time.sleep(2)
+        
+        # Try to copy backend-generated events
+        backend_events = self.backend_path / "data" / "output" / "events.jsonl"
+        if backend_events.exists():
+            import shutil
+            shutil.copy(backend_events, test_output / "events.jsonl")
+            shutil.copy(backend_events, final_output / "events.jsonl")
+            self.log("Backend events copied to output directories")
+        else:
+            # Create placeholder events if none generated
+            self.log("No backend events found, creating sample events...")
+            self.create_sample_events(test_output / "events.jsonl")
+            self.create_sample_events(final_output / "events.jsonl")
+        
+        self.log(f"Event generation completed with {event_count} total events")
+        return True
+    
+    def create_sample_events(self, output_path):
+        """Create sample events for demonstration"""
+        sample_events = [
+            {
+                "timestamp": "2025-01-01T12:00:00",
+                "event_id": "E001",
+                "event_data": {
+                    "event_name": "Success Operation",
+                    "station_id": "SCC1",
+                    "customer_id": "C001",
+                    "product_sku": "PRD_F_03"
+                }
+            },
+            {
+                "timestamp": "2025-01-01T12:05:00",
+                "event_id": "E002",
+                "event_data": {
+                    "event_name": "Scanner Avoidance",
+                    "station_id": "SCC1",
+                    "customer_id": "C002",
+                    "product_sku": "PRD_S_04"
+                }
+            },
+            {
+                "timestamp": "2025-01-01T12:10:00",
+                "event_id": "E003",
+                "event_data": {
+                    "event_name": "Long Queue Length",
+                    "station_id": "SCC2",
+                    "num_of_customers": 7
+                }
+            }
+        ]
+        
+        with open(output_path, 'w') as f:
+            for event in sample_events:
+                f.write(json.dumps(event) + '\n')
     
     def take_screenshots(self):
         """Take dashboard screenshots (placeholder)"""
@@ -241,10 +376,10 @@ class SentinelDemo:
     
     def wait_for_demo(self):
         """Wait for demo to run and collect data"""
-        self.log("Demo is running. Collecting data for 30 seconds...")
+        self.log("Demo is running. Collecting data...")
         
-        # Let the system run and collect some data
-        time.sleep(30)
+        # Generate events and wait for system to process them
+        self.wait_for_events_generation()
         
         # Take screenshots
         self.take_screenshots()
@@ -274,49 +409,118 @@ class SentinelDemo:
             self.log("=== Project Sentinel Demo Starting ===")
             
             # Step 1: Install dependencies
-            self.install_python_dependencies()
-            frontend_available = self.install_node_dependencies()
+            try:
+                self.install_python_dependencies()
+                self.log("✓ Python dependencies installed")
+            except Exception as e:
+                self.log(f"✗ Python dependency installation failed: {e}")
+                self.log("⚠ Trying standalone mode instead...")
+                return self.run_standalone_fallback()
+            
+            try:
+                frontend_available = self.install_node_dependencies()
+                if frontend_available:
+                    self.log("✓ Node.js dependencies installed")
+                else:
+                    self.log("⚠ Frontend dependencies not available")
+            except Exception as e:
+                self.log(f"⚠ Frontend installation failed: {e}")
+                frontend_available = False
             
             # Step 2: Start streaming server
-            self.start_streaming_server()
+            try:
+                self.start_streaming_server()
+                self.log("✓ Data streaming server started")
+            except Exception as e:
+                self.log(f"⚠ Streaming server failed: {e}")
             
-            # Step 3: Start backend
-            if not self.start_backend():
-                self.log("ERROR: Failed to start backend")
+            # Step 3: Start backend (critical - must succeed)
+            try:
+                if not self.start_backend():
+                    self.log("✗ Backend startup failed - cannot continue")
+                    return False
+                self.log("✓ Flask backend started")
+            except Exception as e:
+                self.log(f"✗ Backend failed: {e}")
                 return False
             
-            # Step 4: Start frontend (if available)
+            # Step 4: Start frontend (optional)
             if frontend_available:
-                self.start_frontend()
+                try:
+                    if self.start_frontend():
+                        self.log("✓ React frontend started")
+                    else:
+                        self.log("⚠ Frontend failed to start")
+                        frontend_available = False
+                except Exception as e:
+                    self.log(f"⚠ Frontend startup failed: {e}")
+                    frontend_available = False
             
-            # Step 5: Generate sample data
-            self.generate_sample_events()
-            
-            # Step 6: Wait and collect data
+            # Step 5: Wait and collect data
+            self.log("✓ System is running - collecting data...")
             self.wait_for_demo()
             
             self.log("=== Demo Complete ===")
-            self.log(f"Results available in: {self.output_path.absolute()}")
+            self.log(f"✓ Results available in evidence/output/")
             
             if frontend_available:
-                self.log("Dashboard available at: http://localhost:3000")
-            self.log("API available at: http://localhost:5000")
+                self.log("🌐 Dashboard: http://localhost:3000")
+            self.log("🔧 Backend API: http://localhost:5000")
+            self.log("📊 Health Check: http://localhost:5000/api/health")
+            
+            # Keep running to allow manual testing
+            self.log("\nDemo is running. Press Ctrl+C to stop all services.")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                self.log("Stopping demo...")
             
             return True
             
         except KeyboardInterrupt:
             self.log("Demo interrupted by user")
-            return False
+            return True  # Not an error
         except Exception as e:
             self.log(f"Demo failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         finally:
             self.cleanup()
+    
+    def run_standalone_fallback(self):
+        """Run standalone version as fallback"""
+        try:
+            self.log("Starting standalone demo (no external dependencies required)...")
+            
+            # Import and run standalone version
+            standalone_script = Path(__file__).parent / "run_standalone.py"
+            if standalone_script.exists():
+                import subprocess
+                result = subprocess.run([sys.executable, str(standalone_script)], 
+                                     cwd=standalone_script.parent)
+                return result.returncode == 0
+            else:
+                self.log("✗ Standalone script not found")
+                return False
+        except Exception as e:
+            self.log(f"✗ Standalone fallback failed: {e}")
+            return False
 
 def main():
     """Main entry point"""
     demo = SentinelDemo()
     success = demo.run()
+    
+    if not success:
+        print("\n" + "="*50)
+        print("ALTERNATIVE: Try the standalone version")
+        print("="*50)
+        print("Run: python run_standalone.py")
+        print("This version requires no external dependencies!")
+        print("="*50)
+    
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
