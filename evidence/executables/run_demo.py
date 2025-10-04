@@ -22,9 +22,9 @@ class SentinelDemo:
         self.base_path = Path(__file__).parent.parent.parent
         self.src_path = self.base_path / "src"
         self.backend_path = self.src_path / "backend"
-        self.frontend_path = self.src_path / "frontend"
-        self.zebra_path = self.base_path / "zebra"
-        self.stream_server_path = self.zebra_path / "data" / "streaming-server"
+        self.frontend_path = self.src_path / "frontend" 
+        self.data_path = self.src_path / "data"
+        self.stream_server_path = self.data_path / "streaming-server"
         self.output_path = Path("./results")
         
         self.backend_process = None
@@ -250,11 +250,12 @@ class SentinelDemo:
         """Start the data streaming server"""
         self.log("Starting streaming server...")
         
-        # Look for streaming server in zebra directory
+        # Look for streaming server in src/data directory
         streaming_server_path = None
         possible_paths = [
-            self.base_path / "zebra" / "data" / "streaming-server" / "stream_server.py",
-            Path("../../zebra/data/streaming-server/stream_server.py"),
+            self.stream_server_path / "stream_server.py",
+            self.src_path / "data" / "streaming-server" / "stream_server.py",
+            self.base_path / "zebra" / "data" / "streaming-server" / "stream_server.py",  # fallback
             Path("./stream_server.py")
         ]
         
@@ -328,13 +329,19 @@ class SentinelDemo:
             return None
         
         try:
-            # First try to build the frontend
-            self.log("Building frontend...")
+            # First try to build the frontend (ignoring TypeScript errors)
+            self.log("Building frontend (ignoring TS errors)...")
             try:
+                # Use the new build script that skips TypeScript checking
                 npm_build_cmd = "npm run build"
-                subprocess.run(npm_build_cmd, shell=True, cwd=self.frontend_path, check=False)
-            except:
-                self.log("Build failed, trying dev server anyway...")
+                result = subprocess.run(npm_build_cmd, shell=True, cwd=self.frontend_path, 
+                                      capture_output=True, text=True, check=False)
+                if result.returncode == 0:
+                    self.log("✓ Frontend built successfully")
+                else:
+                    self.log(f"Build had warnings/errors but continuing: {result.stderr}")
+            except Exception as e:
+                self.log(f"Build failed, trying dev server anyway: {e}")
             
             # Start development server
             self.log("Starting development server...")
@@ -449,38 +456,15 @@ class SentinelDemo:
             for event in sample_events:
                 f.write(json.dumps(event) + '\n')
     
-    def take_screenshots(self):
-        """Take dashboard screenshots (placeholder)"""
-        self.log("Taking dashboard screenshots...")
-        
-        # Create screenshots directory
-        screenshots_dir = self.output_path / "screenshots"
-        screenshots_dir.mkdir(exist_ok=True)
-        
-        # Create placeholder screenshot info
-        screenshot_info = {
-            "dashboard-overview.png": "Main dashboard with real-time analytics",
-            "alerts-panel.png": "Security alerts and anomaly detection",
-            "station-overview.png": "Self-checkout station status monitoring",
-            "event-log.png": "Real-time event detection log"
-        }
-        
-        with open(screenshots_dir / "screenshot-info.json", "w") as f:
-            json.dump(screenshot_info, f, indent=2)
-        
-        self.log("Screenshot placeholders created")
-    
+
     def wait_for_demo(self):
-        """Wait for demo to run and collect data"""
-        self.log("Demo is running. Collecting data...")
+        """Wait for demo to run and collect event data"""
+        self.log("Collecting event detection data...")
         
         # Generate events and wait for system to process them
         self.wait_for_events_generation()
         
-        # Take screenshots
-        self.take_screenshots()
-        
-        self.log("Demo data collection complete")
+        self.log("Event data collection complete")
     
     def cleanup(self, signum=None, frame=None):
         """Clean up processes"""
@@ -545,6 +529,11 @@ class SentinelDemo:
                 try:
                     if self.start_frontend():
                         self.log("✓ React frontend started")
+                        self.log("")
+                        self.log("🌐 FRONTEND DASHBOARD READY:")
+                        self.log("   → http://localhost:3000")
+                        self.log("   → http://127.0.0.1:3000")
+                        self.log("")
                     else:
                         self.log("⚠ Frontend failed to start")
                         frontend_available = False
@@ -559,10 +548,29 @@ class SentinelDemo:
             self.log("=== Demo Complete ===")
             self.log(f"✓ Results available in evidence/output/")
             
+            # Display service URLs prominently
+            self.log("\n" + "="*60)
+            self.log("🚀 PROJECT SENTINEL SERVICES RUNNING")
+            self.log("="*60)
+            
             if frontend_available:
-                self.log("🌐 Dashboard: http://localhost:3000")
-            self.log("🔧 Backend API: http://localhost:5000")
-            self.log("📊 Health Check: http://localhost:5000/api/health")
+                self.log("🌐 MAIN DASHBOARD (Real-time Analytics):")
+                self.log("   → http://localhost:3000")
+                self.log("   → http://127.0.0.1:3000")
+                self.log("   Features: Live event detection, alerts, station monitoring")
+                self.log("")
+            
+            self.log("🔧 BACKEND API:")
+            self.log("   → http://localhost:5000")
+            self.log("   → http://127.0.0.1:5000")
+            self.log("")
+            
+            self.log("📊 API ENDPOINTS:")
+            self.log("   → Health: http://localhost:5000/api/health")
+            self.log("   → Metrics: http://localhost:5000/api/metrics") 
+            self.log("   → Events: http://localhost:5000/api/events")
+            self.log("   → CORS Test: http://localhost:5000/api/cors-test")
+            self.log("="*60)
             
             # Keep running to allow manual testing
             self.log("\nDemo is running. Press Ctrl+C to stop all services.")

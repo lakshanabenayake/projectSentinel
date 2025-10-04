@@ -44,13 +44,22 @@ export const useSocket = () => {
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
   const connectSocket = useCallback(() => {
-    const newSocket = io('http://localhost:5000', {
-      transports: ['websocket'],
+    // Try to determine the backend URL dynamically
+    const backendUrl = window.location.hostname === '127.0.0.1' 
+      ? 'http://127.0.0.1:5000' 
+      : 'http://localhost:5000'
+    
+    console.log(`Connecting to backend at: ${backendUrl}`)
+    
+    const newSocket = io(backendUrl, {
+      transports: ['websocket', 'polling'], // Include polling as fallback
       autoConnect: true,
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: 5,
-      timeout: 20000
+      timeout: 20000,
+      withCredentials: true, // Include credentials for CORS
+      forceNew: true
     })
 
     newSocket.on('connect', () => {

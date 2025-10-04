@@ -25,11 +25,27 @@ except ImportError as e:
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'project-sentinel-secret-key'
-CORS(app, origins=["http://localhost:3000"])
+
+# Allow both localhost and 127.0.0.1 for frontend connections
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000", 
+    "http://localhost:5173",  # Vite dev server alternative port
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",  # Vite preview server
+    "http://127.0.0.1:4173"
+]
+
+# Configure CORS with more permissive settings for development
+CORS(app, 
+     origins=allowed_origins, 
+     supports_credentials=True,
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
 # Use threading async_mode to avoid eventlet issues on Python 3.12
 socketio = SocketIO(app, 
-                   cors_allowed_origins=["http://localhost:3000"], 
+                   cors_allowed_origins=allowed_origins, 
                    async_mode='threading',
                    logger=False, 
                    engineio_logger=False)
@@ -309,11 +325,28 @@ def get_recent_events():
     """Get recent events"""
     return jsonify(dashboard_metrics["alerts"][-20:])  # Last 20 alerts
 
+@app.route('/api/cors-test', methods=['GET'])
+def cors_test():
+    """Test CORS configuration"""
+    origin = request.headers.get('Origin', 'No Origin')
+    return jsonify({
+        'status': 'success',
+        'message': 'CORS is working',
+        'origin': origin,
+        'allowed_origins': allowed_origins,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
 # Socket.IO Events
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
+    origin = request.headers.get('Origin', 'Unknown')
+    user_agent = request.headers.get('User-Agent', 'Unknown')
     print(f'Client connected: {request.sid}')
+    print(f'  Origin: {origin}')
+    print(f'  User-Agent: {user_agent[:50]}...' if len(user_agent) > 50 else f'  User-Agent: {user_agent}')
+    
     connected_clients.append(request.sid)
     # Send current metrics to new client
     broadcast_metrics()

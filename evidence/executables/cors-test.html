@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS and Socket.IO Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Project Sentinel CORS Test</h1>
+    <div id="status">Testing...</div>
+    
+    <h2>Test Results:</h2>
+    <div id="results"></div>
+    
+    <h2>Socket.IO Test:</h2>
+    <div id="socket-status">Not connected</div>
+    <div id="socket-events"></div>
+
+    <script>
+        const log = (message) => {
+            const results = document.getElementById('results');
+            results.innerHTML += '<div>' + new Date().toISOString() + ': ' + message + '</div>';
+        };
+
+        const updateStatus = (message) => {
+            document.getElementById('status').textContent = message;
+        };
+
+        // Test 1: Basic CORS test
+        async function testCORS() {
+            try {
+                const response = await fetch('http://localhost:5000/api/cors-test');
+                const data = await response.json();
+                log('✓ CORS Test Passed: ' + JSON.stringify(data));
+                return true;
+            } catch (error) {
+                log('✗ CORS Test Failed: ' + error.message);
+                return false;
+            }
+        }
+
+        // Test 2: Health endpoint test
+        async function testHealth() {
+            try {
+                const response = await fetch('http://localhost:5000/api/health');
+                const data = await response.json();
+                log('✓ Health Test Passed: ' + JSON.stringify(data));
+                return true;
+            } catch (error) {
+                log('✗ Health Test Failed: ' + error.message);
+                return false;
+            }
+        }
+
+        // Test 3: Socket.IO connection test
+        function testSocket() {
+            const socketStatus = document.getElementById('socket-status');
+            const socketEvents = document.getElementById('socket-events');
+            
+            const socket = io('http://localhost:5000', {
+                transports: ['websocket', 'polling'],
+                withCredentials: true
+            });
+
+            socket.on('connect', () => {
+                socketStatus.textContent = '✓ Connected to Socket.IO';
+                socketStatus.style.color = 'green';
+                log('✓ Socket.IO Connected');
+                
+                // Request metrics
+                socket.emit('request_metrics');
+            });
+
+            socket.on('disconnect', () => {
+                socketStatus.textContent = '✗ Disconnected from Socket.IO';
+                socketStatus.style.color = 'red';
+                log('✗ Socket.IO Disconnected');
+            });
+
+            socket.on('connect_error', (error) => {
+                socketStatus.textContent = '✗ Socket.IO Connection Error: ' + error.message;
+                socketStatus.style.color = 'red';
+                log('✗ Socket.IO Error: ' + error.message);
+            });
+
+            socket.on('metrics_update', (data) => {
+                socketEvents.innerHTML += '<div>📊 Metrics: ' + JSON.stringify(data) + '</div>';
+                log('✓ Received metrics update');
+            });
+
+            socket.on('new_event', (event) => {
+                socketEvents.innerHTML += '<div>🚨 Event: ' + JSON.stringify(event) + '</div>';
+                log('✓ Received new event');
+            });
+        }
+
+        // Run tests
+        async function runTests() {
+            updateStatus('Running tests...');
+            
+            const corsResult = await testCORS();
+            const healthResult = await testHealth();
+            
+            if (corsResult && healthResult) {
+                updateStatus('✓ Basic tests passed - Testing Socket.IO...');
+                testSocket();
+            } else {
+                updateStatus('✗ Basic tests failed');
+            }
+        }
+
+        // Start tests when page loads
+        window.onload = runTests;
+    </script>
+</body>
+</html>
