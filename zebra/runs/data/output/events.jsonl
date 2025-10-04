@@ -1,0 +1,4 @@
+{"timestamp": "2025-10-04T05:58:32.603401", "event_id": "E001", "event_data": {"event_name": "Long Queue Length", "station_id": "SCC1", "num_of_customers": 7}}
+{"timestamp": "2025-10-04T05:58:38.000680", "event_id": "E002", "event_data": {"event_name": "Long Queue Length", "station_id": "SCC1", "num_of_customers": 7}}
+{"timestamp": "2025-10-04T05:58:43.604652", "event_id": "E003", "event_data": {"event_name": "Long Queue Length", "station_id": "SCC1", "num_of_customers": 7}}
+{"timestamp": "2025-10-04T05:58:49.409339", "event_id": "E004", "event_data": {"event_name": "Long Queue Length", "station_id": "SCC1", "num_of_customers": 6}}
